@@ -2,21 +2,32 @@ export async function onRequestPost({ request, env }) {
   try {
     const update = await request.json();
 
-    // 判断：如果机器人收到了带有图片的消息
+    // 确保收到了带有图片的消息
     if (update.message && update.message.photo) {
-      const chatId = update.message.chat.id;
-      const messageId = update.message.message_id;
+      // 提取消息的来源信息
+      const chatId = update.message.chat.id.toString(); // 发消息的聊天框ID（群ID或私聊ID）
+      const senderId = update.message.from.id.toString(); // 发件人的真实用户ID
 
-      // Telegram 会发送多个尺寸的图，我们取数组里最后一张（最高清的原图）
+      // 🛑 核心保安逻辑：身份门禁 🛑
+      // 条件1：如果是发在你的专属群里 (chatId === env.TG_CHAT_ID) -> 放行
+      // 条件2：如果是你本人私聊发给机器人 (senderId === env.ALLOWED_USERIDS) -> 放行
+      // 如果两个都不是，说明是陌生人白嫖！
+      if (chatId !== env.TG_CHAT_ID && senderId !== env.ALLOWED_USERIDS) {
+        // 直接返回 200，假装收到了但其实什么都不做（装死）
+        // 必须返回 200，否则 Telegram 会以为发送失败，一直重试轰炸服务器
+        return new Response('Unauthorized user, dropped.', { status: 200 });
+      }
+
+      // 如果通过了核验，开始干活：提取最高清图片的 ID
+      const messageId = update.message.message_id;
       const photos = update.message.photo;
       const fileId = photos[photos.length - 1].file_id;
 
-      // 自动获取你的当前域名（比如 tc.vvvip.qzz.io）
-      const domain = new URL(request.url).hostname;
       // 拼接成你的专属图床链接
+      const domain = new URL(request.url).hostname;
       const imageUrl = `https://${domain}/file/${fileId}.png`;
 
-      // 准备回复给你的文本内容
+      // 准备回复文本
       const replyText = `🎉 上传成功！\n\n🔗 <b>图片链接：</b>\n<code>${imageUrl}</code>\n\n📝 <b>Markdown 格式：</b>\n<code>![image](${imageUrl})</code>`;
 
       // 调用 Telegram API 发送回复
@@ -27,12 +38,11 @@ export async function onRequestPost({ request, env }) {
           chat_id: chatId,
           text: replyText,
           reply_to_message_id: messageId,
-          parse_mode: 'HTML' // 让返回的链接可以直接点击复制
+          parse_mode: 'HTML'
         })
       });
     }
 
-    // 必须给 Telegram 返回 200，否则它会觉得发送失败而一直重试
     return new Response('OK', { status: 200 });
   } catch (e) {
     return new Response(e.message, { status: 500 });
