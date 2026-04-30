@@ -1,76 +1,45 @@
 export async function onRequestPost({ request, env }) {
   try {
     const update = await request.json();
+    console.log("1. 收到完整消息包:", JSON.stringify(update));
+
     const msg = update.message || update.channel_post;
 
-    if (msg && msg.photo) {
-      const chatId = msg.chat.id.toString();
-      const senderId = msg.from ? msg.from.id.toString() : '';
-
-      // 🛑 1. 严格保安门禁（强制转成字符串对比，杜绝类型识别错误）
-      const allowedUser = String(env.ALLOWED_USERIDS);
-      const allowedGroup = String(env.TG_CHAT_ID);
+    if (msg) {
+      const chatId = msg.chat ? msg.chat.id.toString() : '未知';
+      const senderId = msg.from ? msg.from.id.toString() : '未知';
       
-      if (senderId !== allowedUser && chatId !== allowedGroup) {
-        return new Response('Unauthorized', { status: 200 }); // 陌生人发图直接无视
-      }
+      const envUser = env.ALLOWED_USERIDS ? String(env.ALLOWED_USERIDS) : '【未读取到！】';
+      const envGroup = env.TG_CHAT_ID ? String(env.TG_CHAT_ID) : '【未读取到！】';
 
-      // 💡 2. 状态反馈：先给主人发条消息，证明我活着！
-      await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/sendMessage`, {
+      console.log(`2. 提取的ID -> 发件人: ${senderId}, 聊天框: ${chatId}`);
+      console.log(`3. 你的配置 -> 个人ID: ${envUser}, 群聊ID: ${envGroup}`);
+
+      const diagText = `🚨 <b>系统拦截报告</b>\n\n` +
+                       `👤 <b>我是谁（发件人）：</b> <code>${senderId}</code>\n` +
+                       `🏠 <b>我在哪（聊天框）：</b> <code>${chatId}</code>\n\n` +
+                       `⚙️ <b>后台配置的个人ID：</b> <code>${envUser}</code>\n` +
+                       `⚙️ <b>后台配置的群聊ID：</b> <code>${envGroup}</code>\n\n` +
+                       `<i>如果上面这两组数据对不上，或者显示未读取到，机器人就会把你当成陌生人！</i>`;
+
+      // 强制发送诊断报告
+      const tgRes = await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
-          text: "⏳ 收到图片！正在搬运至图床，请稍候...",
-          reply_to_message_id: msg.message_id
+          text: diagText,
+          parse_mode: 'HTML'
         })
       });
 
-      // 🚀 3. 提取高清原图，并向 Telegram 请求下载地址
-      const fileId = msg.photo[msg.photo.length - 1].file_id;
-      const getFileRes = await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/getFile?file_id=${fileId}`);
-      const fileData = await getFileRes.json();
-      const filePath = fileData.result.file_path;
-
-      // 📥 4. 下载图片文件到 Cloudflare 服务器
-      const fileUrl = `https://api.telegram.org/file/bot${env.TG_BOT_TOKEN}/${filePath}`;
-      const imgRes = await fetch(fileUrl);
-      const imgBlob = await imgRes.blob();
-
-      // 📤 5. 模拟前端网页，将图片正式上传至 Telegraph 图床
-      const formData = new FormData();
-      formData.append('file', imgBlob, 'image.png');
-      
-      const uploadRes = await fetch('https://telegra.ph/upload', {
-        method: 'POST',
-        body: formData
-      });
-      const uploadData = await uploadRes.json();
-
-      // 🎉 6. 上传成功，生成专属链接并回复
-      if (uploadData[0] && uploadData[0].src) {
-        const domain = new URL(request.url).hostname;
-        const finalUrl = `https://${domain}${uploadData[0].src}`;
-
-        const replyText = `🎉 <b>上传成功！</b>\n\n🔗 <b>直接链接：</b>\n<code>${finalUrl}</code>\n\n📝 <b>Markdown 格式：</b>\n<code>![image](${finalUrl})</code>`;
-
-        await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: replyText,
-            parse_mode: 'HTML',
-            reply_to_message_id: msg.message_id
-          })
-        });
-      }
+      const tgData = await tgRes.json();
+      console.log("4. Telegram 接口返回结果:", JSON.stringify(tgData));
     }
-    
-    // 必须告诉 Telegram：我处理完了，别再给我重发了！
+
     return new Response('OK', { status: 200 });
   } catch (e) {
-    // 遇到死机错误也得假装正常，免得服务器卡死
+    console.log("【代码崩溃】:", e.message);
     return new Response('Error', { status: 200 });
   }
 }
